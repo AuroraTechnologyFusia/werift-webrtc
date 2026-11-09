@@ -57,7 +57,7 @@ export class StunProtocol implements Protocol {
     });
   };
 
-  private datagramReceived(data: Buffer, addr: Address) {
+  protected datagramReceived(data: Buffer, addr: Address) {
     try {
       const message = parseMessage(data);
       if (!message) {
@@ -163,12 +163,17 @@ export class StunProtocol implements Protocol {
     }
   }
 
+  /** Releases the socket. A muxed protocol overrides it: the socket is shared. */
+  protected async closeTransport() {
+    await this.transport.close();
+  }
+
   async close() {
     this.closed = true;
     Object.values(this.transactions).forEach((transaction) => {
       transaction.cancel();
     });
-    await this.transport.close();
+    await this.closeTransport();
     this.onRequestReceived.complete();
     this.onDataReceived.complete();
   }

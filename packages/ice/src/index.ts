@@ -7,6 +7,7 @@ export * from "./stun/message";
 export * from "./stun/protocol";
 export * from "./stun/tcpFrame";
 export * from "./stun/tcpProtocol";
+export * from "./stun/udpMux";
 export * from "./turn/protocol";
 export * from "./types/model";
 export * from "./utils";

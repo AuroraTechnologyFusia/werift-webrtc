@@ -9,7 +9,12 @@ import type {
   InterfaceAddresses,
   TlsConnectionOptions,
 } from "../imports/common";
-import type { CandidatePair, Message, Protocol } from "../imports/ice";
+import type {
+  CandidatePair,
+  Message,
+  Protocol,
+  UdpMux,
+} from "../imports/ice";
 import { defaultCodecs } from "../media/codec";
 import { normalizeCodecMimeType } from "../media/codecCompatibility";
 import type {
@@ -74,6 +79,12 @@ export interface PeerConfig {
    * For a family bound by `iceInterfaceAddresses`, addresses other than the bound one are ignored.
    */
   iceAdditionalHostAddresses: string[] | undefined;
+  /**
+   * Ralai fork: a UdpMux shared with other peer connections. The connection
+   * opens no UDP socket of its own and advertises the mux's address as its one
+   * UDP host candidate. Use with `iceLite: true`.
+   */
+  iceUdpMux: UdpMux | undefined;
   iceUseIpv4: boolean;
   iceUseIpv6: boolean;
   iceUseTcp: boolean;
@@ -240,6 +251,7 @@ export function generateDefaultPeerConfig(): PeerConfig {
     icePortRange: undefined,
     iceInterfaceAddresses: undefined,
     iceAdditionalHostAddresses: undefined,
+    iceUdpMux: undefined,
     iceUseIpv4: true,
     iceUseIpv6: true,
     iceUseTcp: false,

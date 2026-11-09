@@ -11,6 +11,7 @@ import {
 } from "./imports/common";
 import { classes, methods } from "./stun/const";
 import { Message } from "./stun/message";
+import type { UdpMux } from "./stun/udpMux";
 import type { Protocol } from "./types/model";
 
 const log = debug("werift-ice : packages/ice/src/ice.ts : log");
@@ -331,6 +332,12 @@ export interface IceOptions {
     protocol: Protocol,
   ) => boolean;
   filterCandidatePair?: (pair: CandidatePair) => boolean;
+  /**
+   * Ralai fork: share one UDP socket with other agents. The agent gathers a
+   * single UDP host candidate, the mux's advertised address, and opens no
+   * socket of its own. Use with `iceLite` (see UdpMux).
+   */
+  udpMux?: UdpMux;
 }
 
 export const defaultOptions: IceOptions = {

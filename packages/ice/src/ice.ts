@@ -37,6 +37,7 @@ import { resolveHostAddresses } from "./internal/resolveHostAddresses";
 import { TCP_CHECK_RESPONSE_TIMEOUT_MS, classes, methods } from "./stun/const";
 import { Message } from "./stun/message";
 import { StunProtocol } from "./stun/protocol";
+import { MuxedStunProtocol, type UdpMux } from "./stun/udpMux";
 import { TcpActiveProtocol, TcpPassiveProtocol } from "./stun/tcpProtocol";
 import { createStunOverTurnClient } from "./turn/protocol";
 import type { Protocol, TransactionRequestOptions } from "./types/model";
@@ -1078,9 +1079,12 @@ export class Connection implements IceConnection {
         protocol.localCandidate.transport === "udp",
     );
 
+    const udpMux = this.options.udpMux;
     const localStunPromises = gatherRelayOnly
       ? []
-      : addresses.map(async (address) => {
+      : udpMux
+        ? [this.gatherMuxedHost(udpMux, stale)]
+        : addresses.map(async (address) => {
           // # create transport
           const protocol = new StunProtocol();
           this.ensureProtocol(protocol);
@@ -2537,6 +2541,65 @@ export class Connection implements IceConnection {
    * Pair a local candidate gathered after remote candidates arrived (a late
    * TURN allocation, a slow host socket) with them.
    */
+  /**
+   * Ralai fork: the password for one of this agent's local ufrags (current,
+   * kept from the previous generation, or staged), or undefined. A UdpMux uses
+   * it to verify which agent a Binding request is for.
+   */
+  localPasswordForUsername(usernameFragment: string): string | undefined {
+    const kept = this.userHistory[usernameFragment];
+    if (kept !== undefined) {
+      return kept;
+    }
+    if (usernameFragment === this.localUsername) {
+      return this.localPassword;
+    }
+    return undefined;
+  }
+
+  /**
+   * Ralai fork: the single UDP host candidate on a shared UdpMux. An ICE
+   * restart keeps it, like any host protocol.
+   */
+  private async gatherMuxedHost(udpMux: UdpMux, stale: () => boolean) {
+    const existing = this.protocols.find(
+      (protocol): protocol is MuxedStunProtocol =>
+        protocol instanceof MuxedStunProtocol,
+    );
+    if (existing) {
+      return undefined;
+    }
+    const protocol = new MuxedStunProtocol(udpMux, (usernameFragment) =>
+      this.localPasswordForUsername(usernameFragment),
+    );
+    this.ensureProtocol(protocol);
+    await protocol.connectionMade();
+    if (stale()) {
+      await protocol.close();
+      return undefined;
+    }
+    const [host, port] = protocol.getExtraInfo();
+    protocol.localIp = host;
+    this.protocols.push(protocol);
+    protocol.localCandidate = new Candidate(
+      candidateFoundation("host", "udp", host),
+      1,
+      "udp",
+      candidatePriority("host", { transport: "udp" }),
+      host,
+      port,
+      "host",
+      undefined,
+      undefined,
+      undefined,
+      this.generation,
+      this.localUsername,
+    );
+    this.pairLocalProtocol(protocol);
+    this.appendLocalCandidate(protocol.localCandidate);
+    return protocol;
+  }
+
   private pairLocalProtocol(protocol: Protocol) {
     // RFC 8445 §8.1.2: once a pair is selected, the check list takes no more
     // Waiting pairs, so a candidate gathered later starts no check.

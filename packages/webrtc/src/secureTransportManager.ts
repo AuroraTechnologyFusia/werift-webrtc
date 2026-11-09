@@ -160,6 +160,7 @@ export class SecureTransportManager {
       portRange: this.config.icePortRange,
       interfaceAddresses: this.config.iceInterfaceAddresses,
       additionalHostAddresses: this.config.iceAdditionalHostAddresses,
+      udpMux: this.config.iceUdpMux,
       filterStunResponse: this.config.iceFilterStunResponse,
       filterCandidatePair: this.config.iceFilterCandidatePair,
       localPasswordPrefix: this.config.icePasswordPrefix,
