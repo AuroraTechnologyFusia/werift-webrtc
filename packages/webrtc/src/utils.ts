@@ -78,15 +78,26 @@ export const microTime = () => {
 export const timestampSeconds = () => Date.now() / 1000;
 
 /**https://datatracker.ietf.org/doc/html/rfc3550#section-4 */
+// Ralai fork: the sender asks for the NTP time on every packet; the value is
+// computed at most once per millisecond.
+let ntpTimeCacheMs = -1;
+let ntpTimeCache = 0n;
+
 export const ntpTime = () => {
   const now = performance.timeOrigin + performance.now() - Date.UTC(1900, 0, 1);
+  const nowMs = Math.floor(now);
+  if (nowMs === ntpTimeCacheMs) {
+    return ntpTimeCache;
+  }
 
   const seconds = now / 1000;
   const [sec, msec] = seconds.toString().split(".").map(Number);
 
   const buf = bufferWriter([4, 4], [sec, msec]);
 
-  return buf.readBigUInt64BE();
+  ntpTimeCacheMs = nowMs;
+  ntpTimeCache = buf.readBigUInt64BE();
+  return ntpTimeCache;
 };
 
 export const ntpTimeToEpochMs = (ntp: bigint) => {

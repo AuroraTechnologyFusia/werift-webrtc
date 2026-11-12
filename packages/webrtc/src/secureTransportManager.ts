@@ -724,7 +724,9 @@ function uniqueTransports(transports: (RTCDtlsTransport | undefined)[]) {
   }, []);
 }
 
+// Ralai fork: AES-CM is preferred. Its block cipher is reused across packets
+// (see cipher/ctr.ts); AES-GCM in Node needs a new cipher object per packet.
 const srtpProfiles = [
-  SRTP_PROFILE.SRTP_AEAD_AES_128_GCM, // prefer
-  SRTP_PROFILE.SRTP_AES128_CM_HMAC_SHA1_80,
+  SRTP_PROFILE.SRTP_AES128_CM_HMAC_SHA1_80, // prefer
+  SRTP_PROFILE.SRTP_AEAD_AES_128_GCM,
 ];

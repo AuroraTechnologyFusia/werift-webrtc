@@ -1,4 +1,5 @@
 import {
+  type Cipher,
   createCipheriv,
   createDecipheriv,
   createHmac,
@@ -26,10 +27,51 @@ export class CipherAesCtr extends CipherAesBase {
     private srtcpSessionAuthTag: Buffer,
   ) {
     super(srtpSessionKey, srtpSessionSalt, srtcpSessionKey, srtcpSessionSalt);
+    this.srtpKeystreamCipher = createCipheriv(
+      "aes-128-ecb",
+      srtpSessionKey,
+      null,
+    );
+    this.srtpKeystreamCipher.setAutoPadding(false);
+  }
+
+  // Ralai fork: one AES block cipher per session, reused for every RTP packet.
+  // AES-CTR is computed here: the counter blocks for a packet are encrypted in
+  // one call and XORed with the payload. In SRTP the block index occupies the
+  // low 16 bits of the counter (RFC 3711 section 4.1.1), so block i is the
+  // packet IV with i in its last two bytes.
+  private readonly srtpKeystreamCipher: Cipher;
+  private counterBlocks = Buffer.alloc(0);
+
+  private applySrtpKeystream(
+    iv: Buffer,
+    input: Buffer,
+    output: Buffer,
+    outputOffset: number,
+  ) {
+    const blockCount = Math.ceil(input.length / 16);
+    const blocksLength = blockCount * 16;
+    if (this.counterBlocks.length < blocksLength) {
+      this.counterBlocks = Buffer.alloc(blocksLength);
+    }
+    const counterBlocks = this.counterBlocks;
+    for (let block = 0; block < blockCount; block++) {
+      const offset = block * 16;
+      iv.copy(counterBlocks, offset, 0, 14);
+      counterBlocks[offset + 14] = block >> 8;
+      counterBlocks[offset + 15] = block & 0xff;
+    }
+    const keystream = this.srtpKeystreamCipher.update(
+      counterBlocks.subarray(0, blocksLength),
+    );
+    for (let i = 0; i < input.length; i++) {
+      output[outputOffset + i] = input[i] ^ keystream[i];
+    }
   }
 
   encryptRtp(header: RtpHeader, payload: Buffer, rolloverCounter: number) {
-    const headerBuffer = header.serialize(header.serializeSize);
+    const headerSize = header.serializeSize;
+    const headerBuffer = header.serialize(headerSize);
 
     const counter = this.generateCounter(
       header.sequenceNumber,
@@ -38,15 +80,20 @@ export class CipherAesCtr extends CipherAesBase {
       this.srtpSessionSalt,
     );
 
-    const cipher = createCipheriv("aes-128-ctr", this.srtpSessionKey, counter);
-    const enc = cipher.update(payload);
+    // Ralai fork: one output allocation; header, ciphertext and tag are written
+    // into it in place.
+    const out = Buffer.allocUnsafe(
+      headerSize + payload.length + this.authTagLength,
+    );
+    headerBuffer.copy(out, 0);
+    this.applySrtpKeystream(counter, payload, out, headerSize);
 
     const authTag = this.generateSrtpAuthTag(
       rolloverCounter,
-      headerBuffer,
-      enc,
+      out.subarray(0, headerSize + payload.length),
     );
-    return Buffer.concat([headerBuffer, enc, authTag]);
+    authTag.copy(out, headerSize + payload.length);
+    return out;
   }
 
   decryptRtp(
@@ -75,18 +122,11 @@ export class CipherAesCtr extends CipherAesBase {
       header.ssrc,
       this.srtpSessionSalt,
     );
-    const cipher = createDecipheriv(
-      "aes-128-ctr",
-      this.srtpSessionKey,
-      counter,
-    );
+    // Ralai fork: decrypted with the reused keystream cipher into one buffer.
     const payload = encryptedPacket.subarray(header.payloadOffset);
-    const buf = cipher.update(payload);
-
-    const dst = Buffer.concat([
-      encryptedPacket.subarray(0, header.payloadOffset),
-      buf,
-    ]);
+    const dst = Buffer.allocUnsafe(encryptedPacket.length);
+    encryptedPacket.copy(dst, 0, 0, header.payloadOffset);
+    this.applySrtpKeystream(counter, payload, dst, header.payloadOffset);
 
     return [
       dst,
@@ -177,7 +217,8 @@ export class CipherAesCtr extends CipherAesBase {
     const counter = Buffer.alloc(16);
     counter.writeUInt32BE(ssrc, 4);
     counter.writeUInt32BE(rolloverCounter, 8);
-    counter.writeUInt32BE(Number(BigInt(sequenceNumber) << 16n), 12);
+    // Ralai fork: plain arithmetic instead of BigInt.
+    counter.writeUInt32BE((sequenceNumber & 0xffff) * 0x10000, 12);
 
     for (let i = 0; i < sessionSalt.length; i++) {
       counter[i] ^= sessionSalt[i];

@@ -1,4 +1,3 @@
-import { BitWriter, getBit } from "../../../common/src";
 
 export type Extension = { id: number; payload: Buffer };
 
@@ -49,43 +48,47 @@ export class RtpHeader {
   /**deserialize only */
   extensionLength?: number;
   extensions: Extension[] = [];
-  constructor(props: Partial<RtpHeader> = {}) {
-    Object.assign(this, props);
+  constructor(props?: Partial<RtpHeader>) {
+    // Ralai fork: the RTP hot path builds headers with no props; skip the
+    // Object.assign then.
+    if (props) {
+      Object.assign(this, props);
+    }
   }
 
+  // Ralai fork: parsed with direct byte reads (no getBit, no per-field
+  // subarray, no array spread): this runs once per received packet.
   static deSerialize(rawPacket: Buffer) {
     const h = new RtpHeader();
-    let currOffset = 0;
-    const v_p_x_cc = rawPacket[currOffset++];
-    h.version = getBit(v_p_x_cc, 0, 2);
-    h.padding = getBit(v_p_x_cc, 2) > 0;
-    h.extension = getBit(v_p_x_cc, 3) > 0;
-    h.csrcLength = getBit(v_p_x_cc, 4, 4);
-    h.csrc = [...Array(h.csrcLength)].map(() => {
-      const csrc = rawPacket.readUInt32BE(currOffset);
-      currOffset += 4;
-      return csrc;
-    });
-    currOffset += csrcOffset - 1;
+    const v_p_x_cc = rawPacket[0];
+    h.version = v_p_x_cc >> 6;
+    h.padding = (v_p_x_cc & 0x20) !== 0;
+    h.extension = (v_p_x_cc & 0x10) !== 0;
+    h.csrcLength = v_p_x_cc & 0x0f;
 
     const m_pt = rawPacket[1];
-    h.marker = getBit(m_pt, 0) > 0;
-    h.payloadType = getBit(m_pt, 1, 7);
+    h.marker = (m_pt & 0x80) !== 0;
+    h.payloadType = m_pt & 0x7f;
 
     h.sequenceNumber = rawPacket.readUInt16BE(seqNumOffset);
     h.timestamp = rawPacket.readUInt32BE(timestampOffset);
     h.ssrc = rawPacket.readUInt32BE(ssrcOffset);
 
-    for (let i = 0; i < h.csrc.length; i++) {
-      const offset = csrcOffset + i * csrcSize;
-      h.csrc[i] = rawPacket.subarray(offset).readUInt32BE();
+    let currOffset = csrcOffset;
+    if (h.csrcLength > 0) {
+      const csrc: number[] = new Array(h.csrcLength);
+      for (let i = 0; i < h.csrcLength; i++) {
+        csrc[i] = rawPacket.readUInt32BE(currOffset);
+        currOffset += csrcSize;
+      }
+      h.csrc = csrc;
     }
     if (h.extension) {
-      h.extensionProfile = rawPacket
-        .subarray(currOffset)
-        .readUInt16BE() as ExtensionProfile;
+      h.extensionProfile = rawPacket.readUInt16BE(
+        currOffset,
+      ) as ExtensionProfile;
       currOffset += 2;
-      const extensionLength = rawPacket.subarray(currOffset).readUInt16BE() * 4;
+      const extensionLength = rawPacket.readUInt16BE(currOffset) * 4;
       h.extensionLength = extensionLength;
       currOffset += 2;
 
@@ -111,7 +114,7 @@ export class RtpHeader {
                 id: extId,
                 payload: rawPacket.subarray(currOffset, currOffset + len),
               };
-              h.extensions = [...h.extensions, extension];
+              h.extensions.push(extension);
               currOffset += len;
             }
           }
@@ -134,7 +137,7 @@ export class RtpHeader {
                 id: extId,
                 payload: rawPacket.subarray(currOffset, currOffset + len),
               };
-              h.extensions = [...h.extensions, extension];
+              h.extensions.push(extension);
               currOffset += len;
             }
           }
@@ -148,7 +151,7 @@ export class RtpHeader {
                 currOffset + extensionLength,
               ),
             };
-            h.extensions = [...h.extensions, extension];
+            h.extensions.push(extension);
             currOffset += h.extensions[0].payload.length;
           }
           break;
@@ -193,18 +196,14 @@ export class RtpHeader {
     const buf = Buffer.alloc(size);
     let offset = 0;
 
-    const v_p_x_cc = new BitWriter(8);
-    v_p_x_cc.set(2, 0, this.version);
-    if (this.padding) v_p_x_cc.set(1, 2, 1);
+    // Ralai fork: direct bit operations instead of BitWriter objects.
     if (this.extensions.length > 0) this.extension = true;
-    if (this.extension) v_p_x_cc.set(1, 3, 1);
-    v_p_x_cc.set(4, 4, this.csrc.length);
-    buf.writeUInt8(v_p_x_cc.value, offset++);
-
-    const m_pt = new BitWriter(8);
-    if (this.marker) m_pt.set(1, 0, 1);
-    m_pt.set(7, 1, this.payloadType);
-    buf.writeUInt8(m_pt.value, offset++);
+    buf[offset++] =
+      ((this.version & 0x03) << 6) |
+      (this.padding ? 0x20 : 0) |
+      (this.extension ? 0x10 : 0) |
+      (this.csrc.length & 0x0f);
+    buf[offset++] = (this.marker ? 0x80 : 0) | (this.payloadType & 0x7f);
 
     buf.writeUInt16BE(this.sequenceNumber, seqNumOffset);
     offset += 2;
@@ -278,8 +277,27 @@ export class RtpPacket {
     return this.header.serializeSize + this.payload.length;
   }
 
+  // Ralai fork: field-by-field copy instead of spread + Object.assign; arrays are
+  // copied so the clone's header can be rewritten without touching the source.
   clone() {
-    return new RtpPacket(new RtpHeader({ ...this.header }), this.payload);
+    const source = this.header;
+    const header = new RtpHeader();
+    header.version = source.version;
+    header.padding = source.padding;
+    header.paddingSize = source.paddingSize;
+    header.extension = source.extension;
+    header.marker = source.marker;
+    header.payloadOffset = source.payloadOffset;
+    header.payloadType = source.payloadType;
+    header.sequenceNumber = source.sequenceNumber;
+    header.timestamp = source.timestamp;
+    header.ssrc = source.ssrc;
+    header.csrcLength = source.csrcLength;
+    header.csrc = source.csrc.slice();
+    header.extensionProfile = source.extensionProfile;
+    header.extensionLength = source.extensionLength;
+    header.extensions = source.extensions.slice();
+    return new RtpPacket(header, this.payload);
   }
 
   serialize() {

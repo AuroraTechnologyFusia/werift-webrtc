@@ -19,6 +19,12 @@ export class SrtpSession extends Session<SrtpContext> {
     return decrypted;
   };
 
+  // Ralai fork: returns the header parsed during decryption so the receiver
+  // does not parse the packet a second time.
+  decryptPacket = (buf: Buffer): [Buffer, RtpHeader] => {
+    return this.remoteContext.decryptRtp(buf);
+  };
+
   encrypt(payload: Buffer, header: RtpHeader) {
     return this.localContext.encryptRtp(payload, header);
   }

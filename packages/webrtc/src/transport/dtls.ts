@@ -414,9 +414,11 @@ export class RTCDtlsTransport implements DtlsTransportStats {
           }
         }
       } else {
+        // Ralai fork: the header comes from the SRTP layer, parsed once.
         let dec: Buffer;
+        let header: RtpHeader;
         try {
-          dec = this.srtp.decrypt(data);
+          [dec, header] = this.srtp.decryptPacket(data);
         } catch (error) {
           if (error instanceof SrtpAuthenticationError) {
             log("dropping invalid SRTP packet", error);
@@ -424,13 +426,10 @@ export class RTCDtlsTransport implements DtlsTransportStats {
           }
           throw error;
         }
-        let rtp;
-        try {
-          rtp = RtpPacket.deSerialize(dec);
-        } catch (error) {
-          log("dropping malformed SRTP packet", error);
-          return;
-        }
+        const rtp = new RtpPacket(
+          header,
+          dec.subarray(header.payloadOffset, dec.length - header.paddingSize),
+        );
         try {
           this.onRtp.execute(rtp);
         } catch (error) {

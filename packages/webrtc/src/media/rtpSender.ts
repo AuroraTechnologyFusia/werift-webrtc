@@ -724,53 +724,60 @@ export class RTCRtpSender {
 
     const ntpTimestamp = ntpTime();
 
-    const originalHeaderExtensions = [...header.extensions];
-    header.extensions = this.headerExtensions
-      .map((extension) => {
-        const payload = (() => {
-          switch (extension.uri) {
-            case RTP_EXTENSION_URI.sdesMid:
-              if (this.mid) {
-                return serializeSdesMid(this.mid);
-              }
-              return;
-            // todo : sender simulcast unsupported now
-            case RTP_EXTENSION_URI.sdesRTPStreamID:
-              if (this.rtpStreamId) {
-                return serializeSdesRTPStreamID(this.rtpStreamId);
-              }
-              return;
-            // todo : sender simulcast unsupported now
-            case RTP_EXTENSION_URI.repairedRtpStreamId:
-              if (this.repairedRtpStreamId) {
-                return serializeRepairedRtpStreamId(this.repairedRtpStreamId);
-              }
-              return;
-            case RTP_EXTENSION_URI.transportWideCC:
-              this.dtlsTransport.transportSequenceNumber = uint16Add(
-                this.dtlsTransport.transportSequenceNumber,
-                1,
-              );
-              return serializeTransportWideCC(
-                this.dtlsTransport.transportSequenceNumber,
-              );
-            case RTP_EXTENSION_URI.absSendTime:
-              return serializeAbsSendTime(ntpTimestamp);
-          }
-        })();
+    // Ralai fork: one loop instead of map/filter/find/sort closures per packet.
+    const originalHeaderExtensions = header.extensions;
+    const extensions: Extension[] = [];
+    for (const extension of this.headerExtensions) {
+      const payload = (() => {
+        switch (extension.uri) {
+          case RTP_EXTENSION_URI.sdesMid:
+            if (this.mid) {
+              return serializeSdesMid(this.mid);
+            }
+            return;
+          // todo : sender simulcast unsupported now
+          case RTP_EXTENSION_URI.sdesRTPStreamID:
+            if (this.rtpStreamId) {
+              return serializeSdesRTPStreamID(this.rtpStreamId);
+            }
+            return;
+          // todo : sender simulcast unsupported now
+          case RTP_EXTENSION_URI.repairedRtpStreamId:
+            if (this.repairedRtpStreamId) {
+              return serializeRepairedRtpStreamId(this.repairedRtpStreamId);
+            }
+            return;
+          case RTP_EXTENSION_URI.transportWideCC:
+            this.dtlsTransport.transportSequenceNumber = uint16Add(
+              this.dtlsTransport.transportSequenceNumber,
+              1,
+            );
+            return serializeTransportWideCC(
+              this.dtlsTransport.transportSequenceNumber,
+            );
+          case RTP_EXTENSION_URI.absSendTime:
+            return serializeAbsSendTime(ntpTimestamp);
+        }
+      })();
 
-        if (payload) return { id: extension.id, payload };
-      })
-      .filter((v) => v) as Extension[];
+      if (payload) extensions.push({ id: extension.id, payload });
+    }
     for (const ext of originalHeaderExtensions) {
-      const exist = header.extensions.find((v) => v.id === ext.id);
+      let exist: Extension | undefined;
+      for (const candidate of extensions) {
+        if (candidate.id === ext.id) {
+          exist = candidate;
+          break;
+        }
+      }
       if (exist) {
         exist.payload = ext.payload;
       } else {
-        header.extensions.push(ext);
+        extensions.push(ext);
       }
     }
-    header.extensions = header.extensions.sort((a, b) => a.id - b.id);
+    extensions.sort((a, b) => a.id - b.id);
+    header.extensions = extensions;
 
     this.ntpTimestamp = ntpTimestamp;
     this.rtpTimestamp = header.timestamp;

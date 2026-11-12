@@ -1,6 +1,6 @@
 {
   "name": "werift",
-  "version": "0.26.0-ralai.1",
+  "version": "0.26.0-ralai.2",
   "description": "WebRTC Implementation for TypeScript (Node.js)",
   "keywords": [
     "WebRTC",
